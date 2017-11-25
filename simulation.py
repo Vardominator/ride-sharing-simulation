@@ -1,12 +1,15 @@
 import pprint
 import numpy as np
 from queue import PriorityQueue
+import copy
 
 class Simulation(object):
     def __init__(self, time=7200.0, num_drivers=20):
         self.reservations = []
+        self.completed_reservations = []
         self.drivers = []
         self.future_event_list = PriorityQueue()
+        self.all_events = []
         self.time = time
         self.num_drivers = num_drivers
         self.initialize_reservations()
@@ -31,7 +34,7 @@ class Simulation(object):
             self.reservations = self.reservations[:-1]
 
     def create_reservation(self, time):
-        # size of part
+        # size of party
         party_size = np.random.choice(np.arange(1,5), 1, p=[0.6, 0.25, 0.10, 0.05])[0]
         
         # reservation 1 time
@@ -61,6 +64,7 @@ class Simulation(object):
 
         dropoff_coords = (np.random.choice(20, 1)[0], a2[0])
         self.reservations.append({
+            'reservation_id': len(self.reservations),
             'party_size': party_size,
             'reserve_time': time,
             'dropoff_coords': dropoff_coords,
@@ -76,6 +80,8 @@ class Simulation(object):
             starting_coords = pickup_coords = [np.random.choice(20, 1)[0], np.random.choice(20, 1)[0]]
             capacity = np.random.choice(list(range(1,7)), 1, p=[0.05, 0.05, 0.40, 0.30, 0.15, 0.05])[0]
             self.drivers.append({
+                'driver_id': i,
+                'initial_location': starting_coords,
                 'current_location': starting_coords,
                 'idle': True,
                 'capacity': capacity,
@@ -99,6 +105,7 @@ class Simulation(object):
     def run(self):
         while not self.future_event_list.empty():
             next_event = self.future_event_list.get()
+            self.all_events.append(copy.deepcopy(next_event))
             # print(next_event)
             event_type = next_event[2]['event_type']
             # print(next_event)
@@ -111,9 +118,10 @@ class Simulation(object):
                                                driver['capacity'] - driver['seats_filled'] >= reservation['party_size']]
                 # find closest driver to current reservation
                 if len(idle_drivers) > 0:
+                    reservation['picked_up'] = True
                     passenger_location = reservation['current_location']
                     min_dist = 1000000
-                    closest_available_driver = idle_drivers[0]
+                    closest_available_driver = None
                     for driver in idle_drivers:
                         driver_location = driver['current_location']
                         dist = sum([abs(driver_location[0]-passenger_location[0]), abs(driver_location[1]-passenger_location[1])])
@@ -240,9 +248,11 @@ class Simulation(object):
                 driver = event['driver']
                 current_time = next_event[0]
                 reservations = driver['current_reservations']
+                # no carpool stuff
                 reservations[0]['dropoff_time'] = current_time
                 driver['serviced_passengers'].append(reservations[0])
                 driver['seats_filled'] -= reservations[0]['party_size']
+                self.completed_reservations.append(reservations[0])
                 reservations.remove(reservations[0])
                 self.future_event_list.put(
                     (
@@ -263,7 +273,6 @@ class Simulation(object):
                 driver['idle'] = True
                 for reservation in self.reservations:
                     if not reservation['picked_up']:
-                        print(reservation)
                         self.future_event_list.put(
                             (
                                 current_time,
@@ -382,10 +391,18 @@ if __name__ == "__main__":
 
     while True:
         try:
-            sim = Simulation()
+            sim = Simulation(time=1800.0, num_drivers=10)
+            print(len(sim.reservations))
+            # for driver in sim.drivers:
+            #     print(driver)
             sim.run()
-            for res in sim.reservations:
-                print(res)
+            # for res in sim.reservations:
+            #     print(res)
+            # for driver in sim.drivers:
+            #     print(driver)
+            # for event in sim.all_events:
+            #     print(event)
+            print(len(sim.completed_reservations))
             break
         except TypeError:
             print('type error')
