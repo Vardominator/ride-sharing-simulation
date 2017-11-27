@@ -4,7 +4,7 @@ from queue import PriorityQueue
 import copy
 
 class Simulation(object):
-    def __init__(self, time=7200.0, num_drivers=20):
+    def __init__(self, time=7200.0, num_drivers=20, num_reservations=100, carpool_threshold=3):
         self.reservations = []
         self.completed_reservations = []
         self.drivers = []
@@ -12,9 +12,19 @@ class Simulation(object):
         self.all_events = []
         self.time = time
         self.num_drivers = num_drivers
+        self.num_reservations = num_reservations
+        self.carpool_threshold = carpool_threshold
         self.initialize_reservations()
         self.initialize_drivers(num_drivers)
         self.initialize_future_event_list()
+
+        self.reservation_ids = []
+
+
+        self.assignment_calls = 0
+        self.assignment_calls_from_intersection_arrival = 0
+        self.assignment_calls_from_intersection_reservation = 0
+        self.assignment_calls_from_idle_arrival = 0
 
     def initialize_reservations(self):
         time = 0.0
@@ -22,24 +32,25 @@ class Simulation(object):
             if time % 60.0 == 0.0:
                 # make 2 reservations per minute
                 # first reservation
-                self.create_reservation(time)
-                
-                # second reservation: exponential distribution
-                second_time = time + np.random.exponential(scale=2)
-                self.create_reservation(second_time)
+                if len(self.reservations) <= self.num_reservations:
+                    self.create_reservation(time)
+
+                    # second reservation: exponential distribution
+                    second_time = time + np.random.exponential(scale=2)
+                    self.create_reservation(second_time)
 
             time += 60.0
-        
-        if self.reservations[-1]['reserve_time'] > 7200.0:
-            self.reservations = self.reservations[:-1]
+
+        self.reservations = self.reservations[:-2]
+        print(len(self.reservations))
 
     def create_reservation(self, time):
         # size of party
         party_size = np.random.choice(np.arange(1,5), 1, p=[0.6, 0.25, 0.10, 0.05])[0]
-        
+
         # reservation 1 time
         reserve_time = time
-        
+
         # carpool
         if party_size == 1:
             prob = [0.5, 0.5]
@@ -63,6 +74,7 @@ class Simulation(object):
             a2 = np.random.choice([x for x in streets if x not in gov_streets], 1)
 
         dropoff_coords = (np.random.choice(20, 1)[0], a2[0])
+
         self.reservations.append({
             'reservation_id': len(self.reservations),
             'party_size': party_size,
@@ -70,9 +82,11 @@ class Simulation(object):
             'dropoff_coords': dropoff_coords,
             'carpool': carpool,
             'current_location': pickup_coords,
+            'assigned': False,
             'picked_up': False,
             'pickup_time': -1,
-            'dropoff_time': -1
+            'dropoff_time': -1,
+            'driver': None
         })
 
     def initialize_drivers(self, num_drivers):
@@ -94,7 +108,6 @@ class Simulation(object):
         for reservation in self.reservations:
             self.future_event_list.put(
                 (reservation['reserve_time'],
-                0, 
                 {
                     'event_type': 'reservation',
                     'event': reservation
@@ -102,138 +115,208 @@ class Simulation(object):
                 )
             )
 
+
     def run(self):
         while not self.future_event_list.empty():
+
+            shifter = np.random.uniform(0.0, 1.0)
+
             next_event = self.future_event_list.get()
             self.all_events.append(copy.deepcopy(next_event))
             # print(next_event)
-            event_type = next_event[2]['event_type']
+            event_type = next_event[1]['event_type']
             # print(next_event)
             if event_type == 'reservation':
                 # RESERVATION EVENT
-                reservation = next_event[2]['event']
-                # isolate idle drivers
-                idle_drivers = [driver for driver in self.drivers 
-                                            if driver['idle'] and 
-                                               driver['capacity'] - driver['seats_filled'] >= reservation['party_size']]
+                reservation1 = next_event[1]['event']
+                # isolate available drivers
+                available_drivers = [driver for driver in self.drivers if driver['capacity'] - driver['seats_filled'] >= reservation1['party_size']]
                 # find closest driver to current reservation
-                if len(idle_drivers) > 0:
-                    reservation['picked_up'] = True
-                    passenger_location = reservation['current_location']
+                if len(available_drivers) > 0 and not reservation1['assigned']:
+                    passenger_location = reservation1['current_location']
                     min_dist = 1000000
                     closest_available_driver = None
-                    for driver in idle_drivers:
+                    for driver in available_drivers:
                         driver_location = driver['current_location']
-                        dist = sum([abs(driver_location[0]-passenger_location[0]), abs(driver_location[1]-passenger_location[1])])
+                        # dist = sum([abs(driver_location[0]-passenger_location[0]), abs(driver_location[1]-passenger_location[1])])
+                        dist = np.linalg.norm(np.array(driver_location) - np.array(passenger_location))
                         if dist < min_dist:
                             min_dist = dist
                             closest_available_driver = driver
                     closest_available_driver['idle'] = False
                     # don't forget to decrease the party size once they are dropped off
-                    closest_available_driver['seats_filled'] += reservation['party_size']
+                    # closest_available_driver['seats_filled'] += reservation['party_size']
                     # ADD RESERVATION ASSIGNMENT TO FEL
+                    # print(closest_available_driver['current_location'])
+                    # print(reservation['current_location'])
+                    # print()
+                    self.assignment_calls_from_intersection_reservation += 1
+                    # print("From reservation event: {}".format(self.assignment_calls_from_intersection_reservation))
+                    if len(self.completed_reservations) >= len(self.reservations):
+                        print("reservation event overdoing")
+                    if reservation1['assigned']:
+                        print('already assigned (reservation)!')
+
                     self.future_event_list.put(
-                        (reservation['reserve_time'],
-                        0,
-                        {
-                            'event_type': 'reservation assignment',
-                            'event': {
-                                'driver': closest_available_driver,
-                                'reservation': reservation 
+                        (
+                            reservation1['reserve_time'] + shifter,
+                            {
+                                'event_type': 'reservation assignment',
+                                'event': {
+                                    'driver': closest_available_driver,
+                                    'reservation': reservation1
+                                }
                             }
-                        }
                         )
                     )
             elif event_type == 'reservation assignment':
+                self.assignment_calls += 1
+                # print('reservation assignment calls: {}'.format(self.assignment_calls))
                 # assign driver to reservation
-                event = next_event[2]['event']
+                event = next_event[1]['event']
                 driver = event['driver']
-                reservation = event['reservation']
-                driver['current_reservations'].append(reservation)
-                # start moving to intersection that is closer to destination
-                # first_location_update = self.update_locations(driver, reservation)
-                self.future_event_list.put(
-                    (
-                        reservation['reserve_time'],
-                        0,
-                        {
-                            'event_type': 'intersection arrival',
-                            'event':{
-                                'driver': driver
-                            }
-                        }
-                    )
-                )
-
-            elif event_type == 'intersection arrival':
-                event = next_event[2]['event']
-                driver = event['driver']
+                reservation2 = event['reservation']
                 current_time = next_event[0]
-                reservations = driver['current_reservations']
-                location_update_time = self.update_locations(driver, reservations[0]['picked_up'])
-                arrival_time = current_time + location_update_time
-                
-                if location_update_time == -1:
-                    # issue pick up or drop off event because driver has arrived to passenger or destination
-                    if not reservations[0]['picked_up']:
-                        self.future_event_list.put(
-                            (
-                                arrival_time,
-                                0,
-                                {
-                                    'event_type': 'pick up',
-                                    'event':{
-                                        'driver': driver
-                                    }
-                                }
-                            )
-                        )
-                    else:
-                        self.future_event_list.put(
-                            (
-                                arrival_time,
-                                0,
-                                {
-                                    'event_type': 'drop off',
-                                    'event':{
-                                        'driver': driver
-                                    }
-                                }
-                            )
-                        )
-                else:
-                    # issue another intersection arrival event
-                    second_priority = 0
-                    if any(arrival_time in event for event in self.future_event_list.queue):
-                        second_priority += 1
+                if reservation2['assigned']:
+                    print('already assigned (res assignment)!')
+                if not reservation2['assigned']:
+                    reservation2 = event['reservation']
+                    reservation2['assigned'] = True
+                    driver['current_reservations'].append(reservation2)
+                    driver['seats_filled'] += reservation2['party_size']
+                    reservation2['driver'] = driver
+                    # start moving to intersection that is closer to destination
                     self.future_event_list.put(
                         (
-                            arrival_time,
-                            second_priority,
+                            current_time + shifter,
                             {
                                 'event_type': 'intersection arrival',
-                                'event':{
+                                'event': {
                                     'driver': driver
                                 }
                             }
                         )
                     )
-            elif event_type == 'pick up':
-                event = next_event[2]['event']
+
+            elif event_type == 'intersection arrival':
+                event = next_event[1]['event']
                 driver = event['driver']
                 current_time = next_event[0]
                 reservations = driver['current_reservations']
-                reservations[0]['picked_up'] = True
-                reservations[0]['pickup_time'] = current_time
-                location_update_time = self.update_locations(driver, reservations[0]['picked_up'])
-                arrival_time = current_time + location_update_time
-                second_priority = 0
-                if any(arrival_time in event for event in self.future_event_list.queue):
-                    second_priority += 1
+
+                # # carpooling: check if there is an unassigned reservation nearby. If so, trigger assignment event
+                # for res in self.reservations:
+                #     # check for unassigned reservations
+                #     if not res['assigned'] and res['carpool']:
+
+                #         reservation_location = res['current_location']
+                #         party_size = res['party_size']
+                #         driver_location = driver['current_location']
+                #         capacity = driver['capacity']
+                #         seats_filled = driver['seats_filled']
+
+                #         # check if driver has space
+                #         if party_size <= capacity - seats_filled and not res['assigned']:
+                #             # check if reservation is close enough
+                #             dx = abs(reservation_location[0] - driver_location[0])
+                #             dy = abs(reservation_location[1] - driver_location[1])
+                #             if dx <= self.carpool_threshold and dy <= self.carpool_threshold:
+                #                 self.assignment_calls_from_intersection_arrival += 1
+                #                 # print('From intersection arriva: {}'.format(self.assignment_calls_from_intersection_arrival))
+                #                 if len(self.completed_reservations) >= len(self.reservations):
+                #                     print("intersection arrival event overdoing")
+                #                 if res['assigned']:
+                #                     print('already assigned (intersection arrival)!')
+                #                 self.future_event_list.put(
+                #                     (
+                #                         current_time + shifter,
+                #                         {
+                #                             'event_type': 'reservation assignment',
+                #                             'event': {
+                #                                 'driver': driver,
+                #                                 'reservation': res
+                #                             }
+                #                         }
+                #                     )
+                #                 )
+                #                 break
+
+                if len(driver['current_reservations']) > 0:
+
+                    closest_reservation = self.closest_reservation(driver)
+                    location_update_time = self.update_locations(driver, closest_reservation, closest_reservation['picked_up'])
+                    arrival_time = current_time + location_update_time
+
+                    if location_update_time == -1:
+                        # issue pick up or drop off event because driver has arrived to passenger or destination
+                        if not closest_reservation['picked_up']:
+                            # print()
+                            # print(closest_reservation['current_location'])
+                            # print(driver['current_location'])
+                            # print(arrival_time)
+                            # print(current_time)
+                            # print()
+                            self.future_event_list.put(
+                                (
+                                    current_time + shifter,
+                                    {
+                                        'event_type': 'pick up',
+                                        'event':{
+                                            'driver': driver,
+                                            'reservation': closest_reservation
+                                        }
+                                    }
+                                )
+                            )
+                        else:
+                            # print()
+                            # print()
+                            # print(driver['current_reservations'])
+                            # print()
+                            # print(closest_reservation)
+                            # print()
+                            # print()
+                            self.future_event_list.put(
+                                (
+                                    arrival_time + shifter,
+                                    {
+                                        'event_type': 'drop off',
+                                        'event':{
+                                            'driver': driver,
+                                            'reservation': closest_reservation
+                                        }
+                                    }
+                                )
+                            )
+                    else:
+                        # issue another intersection arrival event
+                        self.future_event_list.put(
+                            (
+                                arrival_time + shifter,
+                                {
+                                    'event_type': 'intersection arrival',
+                                    'event':{
+                                        'driver': driver
+                                    }
+                                }
+                            )
+                        )
+
+            elif event_type == 'pick up':
+                event = next_event[1]['event']
+                driver = event['driver']
+                reservation = event['reservation']
+                current_time = next_event[0]
+                reservation['picked_up'] = True
+                reservation['pickup_time'] = current_time
+                # print("reserve time: {}".format(reservation['reserve_time']))
+                # print("pickup time: {}".format(current_time))
+
+                # location_update_time = self.update_locations(driver, reservation, reservation['picked_up'])
+                # arrival_time = current_time + location_update_time
                 self.future_event_list.put(
                     (
-                        arrival_time,
-                        second_priority,
+                        current_time + shifter,
                         {
                             'event_type': 'intersection arrival',
                             'event': {
@@ -244,59 +327,121 @@ class Simulation(object):
                 )
             elif event_type == 'drop off':
                 # drop off passenger and issue idle_arrival event for driver to look for reservation
-                event = next_event[2]['event']
+                event = next_event[1]['event']
                 driver = event['driver']
+                reservation = event['reservation']
                 current_time = next_event[0]
-                reservations = driver['current_reservations']
+
                 # no carpool stuff
-                reservations[0]['dropoff_time'] = current_time
-                driver['serviced_passengers'].append(reservations[0])
-                driver['seats_filled'] -= reservations[0]['party_size']
-                self.completed_reservations.append(reservations[0])
-                reservations.remove(reservations[0])
-                self.future_event_list.put(
-                    (
-                        arrival_time,
-                        0,
-                        {
-                            'event_type': 'idle_arrival',
-                            'event': {
-                                'driver': driver
+                # current_reservation = self.closest_reservation(driver)
+
+                # driver_location = driver['current_location']
+                # current_reservation = driver['current_reservations'][0]
+                # current_reservation_location = current_reservation['current_location']
+
+                # # find closest reservation
+                # min_dist = 1000000
+                # for reservation in reservations:
+                #     reservation_location = reservation['current_location']
+                #     dist = np.linalg.norm(np.array(driver_location) - np.array(reservation_location))
+                #     if dist < min_dist:
+                #         min_dist = dist
+                #         current_reservation = reservation
+                #         current_reservation_location = reservation_location
+
+                reservation['dropoff_time'] = current_time
+
+                driver['serviced_passengers'].append(reservation)
+                driver['seats_filled'] -= reservation['party_size']
+                self.completed_reservations.append(reservation)
+
+                reservations = driver['current_reservations']
+                # print()
+                # print()
+                # print(reservations)
+                # print()
+                # print(reservation)
+                # print()
+                # print()
+                reservations.remove(reservation)
+
+                # only trigger idle arrival if reservation list is empty. otherwise trigger, intersection arrival
+                if len(reservations) == 0:
+                    self.future_event_list.put(
+                        (
+                            current_time + shifter,
+                            {
+                                'event_type': 'idle_arrival',
+                                'event': {
+                                    'driver': driver
+                                }
                             }
-                        }
+                        )
                     )
-                )
+                else:
+                    self.future_event_list.put(
+                        (
+                            current_time + shifter,
+                            {
+                                'event_type': 'intersection arrival',
+                                'event': {
+                                    'driver': driver
+                                }
+                            }
+                        )
+                    )
+
             elif event_type == 'idle_arrival':
-                event = next_event[2]['event']
+                event = next_event[1]['event']
                 driver = event['driver']
                 current_time = next_event[0]
                 driver['idle'] = True
-                for reservation in self.reservations:
-                    if not reservation['picked_up']:
+
+                # available_drivers = [driver for driver in self.drivers if driver['idle'] and driver['capacity'] - driver['seats_filled'] >= reservation['party_size']]
+                for res in self.reservations:
+                    if not res['assigned']:
+                        self.assignment_calls_from_idle_arrival += 1
+                        # print("from idle arrival: {}".format(self.assignment_calls_from_idle_arrival))
+                        if len(self.completed_reservations) >= len(self.reservations):
+                            print("idle arrival event overdoing")
+                        if res['assigned']:
+                            print('already assigned (idle arrival)!')
                         self.future_event_list.put(
                             (
                                 current_time,
-                                0,
                                 {
                                     'event_type': 'reservation',
-                                    'event': reservation
+                                    'event': res
                                 }
                             )
                         )
                         break
 
     @staticmethod
-    def update_locations(driver, picked_up = False):
+    def update_locations(driver, closest_reservation, picked_up = False):
         """Take driver and passenger to an intersection that is closer to the destination"""
         # uses normal distribution
         # print(picked_up)
         # 1. check if driver is at pickup location
         # 2. if not, move driver closer to passenger location using normal distribution
-        current_reservation = driver['current_reservations'][0]
-        current_reservation_location = current_reservation['current_location']
 
-        # reservation_location = reservation['current_location']
+        # move closest reservation to front of current reservations list
+        # print(len(driver['current_reservations']))
         driver_location = driver['current_location']
+        current_reservation = closest_reservation
+        current_reservation_location = closest_reservation['current_location']
+
+        # find closest reservation
+        # min_dist = 1000000
+        # for reservation in driver['current_reservations']:
+        #     reservation_location = reservation['current_location']
+        #     dist = np.linalg.norm(np.array(driver_location) - np.array(reservation_location))
+        #     if dist < min_dist:
+        #         min_dist = dist
+        #         current_reservation = reservation
+        #         current_reservation_location = reservation_location
+
+
         dx = current_reservation_location[0] - driver_location[0]
         dy = current_reservation_location[1] - driver_location[1]
 
@@ -374,7 +519,7 @@ class Simulation(object):
                     driver_location[1] -= 1
                 else:
                     driver_location[1] += 1
-            
+
         return intersection_arrival_time_length
 
         # print('driver location: {}'.format(driver_location))
@@ -384,27 +529,55 @@ class Simulation(object):
 
 
         # return intersection arrival time
-        print()
+        # print()
         # pass
+
+    @staticmethod
+    def closest_reservation(driver):
+        driver_location = driver['current_location']
+        reservations = driver['current_reservations']
+        current_reservation = reservations[0]
+        current_reservation_location = current_reservation['current_location']
+
+        # find closest reservation
+        min_dist = 1000000
+        for reservation in driver['current_reservations']:
+            reservation_location = reservation['current_location']
+            dist = np.linalg.norm(np.array(driver_location) - np.array(reservation_location))
+            if dist < min_dist:
+                min_dist = dist
+                current_reservation = reservation
+                current_reservation_location = reservation_location
+        return current_reservation
 
 if __name__ == "__main__":
 
-    while True:
-        try:
-            sim = Simulation(time=1800.0, num_drivers=10)
-            print(len(sim.reservations))
-            # for driver in sim.drivers:
-            #     print(driver)
-            sim.run()
-            # for res in sim.reservations:
-            #     print(res)
-            # for driver in sim.drivers:
-            #     print(driver)
-            # for event in sim.all_events:
-            #     print(event)
-            print(len(sim.completed_reservations))
-            break
-        except TypeError:
-            print('type error')
+    # while True:
+    #     try:
+    sim = Simulation(num_reservations=100, num_drivers=5)
+    print(len(sim.reservations))
+    # for driver in sim.drivers:
+    #     print(driver)
+    sim.run()
+    for res in sim.reservations:
+        print(res['reserve_time'])
+        print(res['pickup_time'])
+        # print(res['current_location'])
+        # print(res['dropoff_coords'])
+        # print(res['pickup_time'])
+        # print(res)
+        # print((res['reserve_time']))
+        # print((res['pickup_time']))
+        # print()[']
+        # print((res['pickup_time'] - res['reserve_time'])/60)
+    # # for driver in sim.drivers:
+    # #     print(driver)
+    # # for event in sim.all_events:
+    # #     print(event)
+    # print(len(sim.completed_reservations))
+
+        #     break
+        # except TypeError:
+        #     print('type error')
     # for driver in sim.drivers:
     #     print(driver)
