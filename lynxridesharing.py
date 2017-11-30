@@ -13,6 +13,13 @@ from cocos.actions import *
 from pyglet.window.key import symbol_string
 from simulation import Simulation
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--drivers', type=int, default=20)
+parser.add_argument('--reservations', type=int, default=100)
+ARGS = parser.parse_args()
+
 class LynxRideSharing(cocos.layer.Layer):
 
     is_event_handler = True
@@ -55,20 +62,19 @@ class LynxRideSharing(cocos.layer.Layer):
 
         self.shift_x = 400
         self.shift_y = 20
-        self.duration = 0.05
-        self.dt = 0.005
+        self.duration = 0.01
+        self.dt = 0.01
         self.intersections = []
         self.icoords = []
         self.cars = []
         self.car_labels = []
         self.active_reservations = []
-        self.simulation = Simulation(num_drivers=10, num_reservations=40)
+        self.simulation = Simulation(num_drivers=ARGS.drivers, num_reservations=ARGS.reservations)
         self.initialize_map()
         self.initialize_monitor()
 
         self.reservation_ids = []
         self.first_time_moves = []
-
         self.keys_being_pressed = set()
 
         self.simulation.run()
@@ -153,6 +159,7 @@ class LynxRideSharing(cocos.layer.Layer):
         for driver in self.simulation.drivers:
             car = cocos.sprite.Sprite('resources/ferrari.png')
             car.position = (driver['initial_location'][0]*50 + self.shift_x, driver['initial_location'][1]*50 + self.shift_y)
+            self.cars.append(car)
             car_id_label = cocos.text.Label(
                 str(driver['driver_id']),
                 font_name = 'Arial',
@@ -161,7 +168,15 @@ class LynxRideSharing(cocos.layer.Layer):
                 anchor_y = 'center',
                 position = (driver['initial_location'][0]*50 + self.shift_x + 20, driver['initial_location'][1]*50 + self.shift_y - 20)
             )
-            self.cars.append(car)
+            # car_capacity_label = cocos.text.Label(
+            #     str(driver['capacity']),
+            #     font_name = 'Arial',
+            #     font_size = 12,
+            #     anchor_x = 'center',
+            #     anchor_y = 'center',
+            #     position = (driver['initial_location'][0]*50 - self.shift_x + 20, driver['initial_location'][1]*50 + self.shift_y - 20)
+            # )
+            # self.add(car_capacity_label)
             self.car_labels.append(car_id_label)
             self.add(car)
             self.add(car_id_label)
@@ -172,13 +187,13 @@ class LynxRideSharing(cocos.layer.Layer):
             event_time = next_event[0]
             event_type = next_event[1]['event_type']
             event = next_event[1]['event']
-
+            # print(event_time)
             self.time_label.element.text = '{}:{}'.format(int(event_time/60), '{0:0>2}'.format(int(event_time%60)))
 
             if event_type == 'reservation':
-                print(event['reservation_id'])
+                # print(event['reservation_id'])
                 if event['reservation_id'] not in self.reservation_ids:
-                    print(event['reservation_id'])
+                    # print(event['reservation_id'])
                     self.reservation_ids.append(event['reservation_id'])
                     self.first_time_moves.append(False)
                     reservation = cocos.sprite.Sprite('resources/reservation.png')
@@ -260,15 +275,15 @@ class LynxRideSharing(cocos.layer.Layer):
             self.run_simulation()
 
 
-if __name__ == "__main__":
-    # initialize and create a window
-    director.init(width=1400, height=1000, caption="Lynx - Ferrari's Only", fullscreen=False)
 
-    # create a hello world instance
-    lynx_layer = LynxRideSharing()
+# initialize and create a window
+director.init(width=1400, height=1000, caption="Lynx - Ferrari's Only", fullscreen=False)
 
-    # create a scene that contains the LynxRideSharing layer
-    main_scene = cocos.scene.Scene(lynx_layer)
+# create a hello world instance
+lynx_layer = LynxRideSharing()
 
-    # run the scene
-    director.run(main_scene)
+# create a scene that contains the LynxRideSharing layer
+main_scene = cocos.scene.Scene(lynx_layer)
+
+# run the scene
+director.run(main_scene)

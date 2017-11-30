@@ -1,12 +1,47 @@
 import pprint
 import numpy as np
+import scipy.stats as st
 from queue import PriorityQueue
 import copy
 
 class Simulation(object):
     def __init__(self, time=7200.0, num_drivers=20, num_reservations=100, carpool_threshold=3):
+        """Ride Sharing Discrete Event Simulation
+
+        This module populates and maintains a future event list of a ride-sharing 
+        discrete event simulation. There are two types of entities: reservations and 
+        drivers. There are six types of events: Reservation, Reservation Assignment, 
+        Intersection Arrival, Pick Up, Drop Off, and Idle Arrival. The simulation 
+        terminates when either the maximum input time is reached or the goal number 
+        of reservations are fulfilled. This class is instantiated by the LynxRideSharing 
+        game object. Other information: 20x20 intersections, intersection arrival
+        follows a normal distribution, reservations follow an exponential distribution.
+        Pickup destinations are random, but dropoff destinations depend on the "time
+        of day" and "type of street", party size of a reservation and driver capacity
+        follows a particular distribution, and whether or not a reservations approves
+        of a carpool depends on its party size.
+
+        Args:
+            time (float): The maximum time at which an event can take place
+            num_drivers (int): The number of drivers fulfilling reservations
+            num_reservations (int): The goal number of reservations
+            carpool_threshold (int): The maximum number of blocks a driver should
+                veer off its path given that its fulfulling a reservation and the
+                reservations approves of a carpool.
+        
+        Attributes:
+            reservations: list of reservation dictionaries
+            drivers: list of driver dictionaries
+            future_event_list: priority queue of all events in the simulation
+            all_events: list of all events handled in order, used in GUI
+            time: time of the simulation (argument)
+            num_drivers: number of drivers (argument)
+            num_reservations: number of reservations (argument)
+            carpool_threshold: carpool threshold when drivers are fulfilling reservations
+
+        """
+
         self.reservations = []
-        self.completed_reservations = []
         self.drivers = []
         self.future_event_list = PriorityQueue()
         self.all_events = []
@@ -14,44 +49,40 @@ class Simulation(object):
         self.num_drivers = num_drivers
         self.num_reservations = num_reservations
         self.carpool_threshold = carpool_threshold
+
         self.initialize_reservations()
         self.initialize_drivers(num_drivers)
         self.initialize_future_event_list()
 
-        self.reservation_ids = []
-
-
-        self.assignment_calls = 0
-        self.assignment_calls_from_intersection_arrival = 0
-        self.assignment_calls_from_intersection_reservation = 0
-        self.assignment_calls_from_idle_arrival = 0
-
     def initialize_reservations(self):
+        """Called in __init__. Every minute a reservation is initialized followed by another
+           reservation that follows an exponential distribution."""
+
         time = 0.0
         while time < self.time:
             if time % 60.0 == 0.0:
-                # make 2 reservations per minute
-                # first reservation
                 if len(self.reservations) <= self.num_reservations:
                     self.create_reservation(time)
-
-                    # second reservation: exponential distribution
                     second_time = time + np.random.exponential(scale=2)
                     self.create_reservation(second_time)
-
             time += 60.0
-
         self.reservations = self.reservations[:-2]
-        print(len(self.reservations))
 
     def create_reservation(self, time):
-        # size of party
-        party_size = np.random.choice(np.arange(1,5), 1, p=[0.6, 0.25, 0.10, 0.05])[0]
+        """Creates a reservation given the time. The pickup location is random, 
+           but the dropoff location depends on the time of day and street type.
+           This follows a particular distribution. The reservation party size
+           is also follows a particular distribution.
+        
+        Args:
+            time (float): The time of the reservation
 
-        # reservation 1 time
+        """
+
+        party_size = np.random.choice(np.arange(1,5), 1, p=[0.6, 0.25, 0.10, 0.05])[0]
         reserve_time = time
 
-        # carpool
+        # RESERVATION PARTY SIZE WHICH DETERMINES PROBABILITY OF ACCEPTING CARPOOLS
         if party_size == 1:
             prob = [0.5, 0.5]
         elif party_size == 2:
@@ -62,12 +93,16 @@ class Simulation(object):
             prob = [0.70, 0.30]
         carpool = np.random.choice(2, 1, p=prob)[0]
 
-        # S1, A1
-        pickup_coords = [np.random.choice(20, 1)[0], np.random.choice(20, 1)[0]]
-        # S2, A2
-        time_of_day = np.random.choice(2, 1, p=[0.75, 0.25])[0]
+        # STREETS
         gov_streets = [4,8,12,16]
         streets = list(range(20))
+
+        # S1, A1 (PICKUP LOCATION)
+        pickup_coords = [np.random.choice(20, 1)[0], np.random.choice(20, 1)[0]]
+
+        # S2, A2 (DROPOFF LOCATION, DEPENDS ON TIME OF DAY AND TYPE OF STREET)
+        time_of_day = np.random.choice(2, 1, p=[0.75, 0.25])[0]
+
         if time_of_day == 0:
             a2 = np.random.choice(gov_streets, 1)
         else:
@@ -90,6 +125,14 @@ class Simulation(object):
         })
 
     def initialize_drivers(self, num_drivers):
+        """Called in __init__. Initializes and creates the drivers based on random 
+           starting location and a capacity that follows a particular distribution.
+
+        Args:
+            The number of drivers given as a class parameter
+
+        """
+
         for i in range(num_drivers):
             starting_coords = pickup_coords = [np.random.choice(20, 1)[0], np.random.choice(20, 1)[0]]
             capacity = np.random.choice(list(range(1,7)), 1, p=[0.05, 0.05, 0.40, 0.30, 0.15, 0.05])[0]
@@ -105,6 +148,8 @@ class Simulation(object):
             })
 
     def initialize_future_event_list(self):
+        """Initializes the future event list of inserting all reservations as events. """
+
         for reservation in self.reservations:
             self.future_event_list.put(
                 (reservation['reserve_time'],
@@ -117,49 +162,41 @@ class Simulation(object):
 
 
     def run(self):
+        """Pops events from the future event list until it is empty. Inserts events if
+           necessary. An events priority is the time of the event. A uniform random
+           is added to each new event time in case events have the same priority. This
+           makes it much easier than keeping track of a second priority. One an event
+           is popped, its event type is checked an action is taken accordingly. """
+
         while not self.future_event_list.empty():
-
             shifter = np.random.uniform(0.0, 1.0)
-
             next_event = self.future_event_list.get()
             self.all_events.append(copy.deepcopy(next_event))
-            # print(next_event)
             event_type = next_event[1]['event_type']
-            # print(next_event)
+
             if event_type == 'reservation':
                 # RESERVATION EVENT
                 reservation1 = next_event[1]['event']
-                # isolate available drivers
+                current_time = next_event[0]
+                # ISOLATE AVAILABLE DRIVERS
                 available_drivers = [driver for driver in self.drivers if driver['capacity'] - driver['seats_filled'] >= reservation1['party_size']]
-                # find closest driver to current reservation
+                # FIND THE CLOSEST DRIVER TO THE CURRENT RESERVATION
                 if len(available_drivers) > 0 and not reservation1['assigned']:
                     passenger_location = reservation1['current_location']
                     min_dist = 1000000
                     closest_available_driver = None
                     for driver in available_drivers:
                         driver_location = driver['current_location']
-                        # dist = sum([abs(driver_location[0]-passenger_location[0]), abs(driver_location[1]-passenger_location[1])])
                         dist = np.linalg.norm(np.array(driver_location) - np.array(passenger_location))
                         if dist < min_dist:
                             min_dist = dist
                             closest_available_driver = driver
                     closest_available_driver['idle'] = False
-                    # don't forget to decrease the party size once they are dropped off
-                    # closest_available_driver['seats_filled'] += reservation['party_size']
-                    # ADD RESERVATION ASSIGNMENT TO FEL
-                    # print(closest_available_driver['current_location'])
-                    # print(reservation['current_location'])
-                    # print()
-                    self.assignment_calls_from_intersection_reservation += 1
-                    # print("From reservation event: {}".format(self.assignment_calls_from_intersection_reservation))
-                    if len(self.completed_reservations) >= len(self.reservations):
-                        print("reservation event overdoing")
-                    if reservation1['assigned']:
-                        print('already assigned (reservation)!')
 
+                    # TRIGGER A 'reservation assignment' EVENT
                     self.future_event_list.put(
                         (
-                            reservation1['reserve_time'] + shifter,
+                            current_time + shifter,
                             {
                                 'event_type': 'reservation assignment',
                                 'event': {
@@ -169,23 +206,22 @@ class Simulation(object):
                             }
                         )
                     )
+
             elif event_type == 'reservation assignment':
-                self.assignment_calls += 1
-                # print('reservation assignment calls: {}'.format(self.assignment_calls))
-                # assign driver to reservation
+                # ASSIGN A DRIVER TO THE RESERVATION
                 event = next_event[1]['event']
                 driver = event['driver']
                 reservation2 = event['reservation']
                 current_time = next_event[0]
-                if reservation2['assigned']:
-                    print('already assigned (res assignment)!')
+
                 if not reservation2['assigned']:
                     reservation2 = event['reservation']
                     reservation2['assigned'] = True
                     driver['current_reservations'].append(reservation2)
                     driver['seats_filled'] += reservation2['party_size']
                     reservation2['driver'] = driver
-                    # start moving to intersection that is closer to destination
+
+                    # TRIGGER FIRST INTERSECTION ARRIVAL EVENT
                     self.future_event_list.put(
                         (
                             current_time + shifter,
@@ -199,12 +235,13 @@ class Simulation(object):
                     )
 
             elif event_type == 'intersection arrival':
+                # ARRIVE AT AN INTERSECTION
                 event = next_event[1]['event']
                 driver = event['driver']
                 current_time = next_event[0]
                 reservations = driver['current_reservations']
 
-                # # carpooling: check if there is an unassigned reservation nearby. If so, trigger assignment event
+                # # an optimized version of carpooling that does not yet work: check if there is an unassigned reservation nearby. If so, trigger assignment event
                 # for res in self.reservations:
                 #     # check for unassigned reservations
                 #     if not res['assigned'] and res['carpool']:
@@ -242,20 +279,14 @@ class Simulation(object):
                 #                 break
 
                 if len(driver['current_reservations']) > 0:
-
+                    # GO TO NEAREST RESERVATION
                     closest_reservation = self.closest_reservation(driver)
                     location_update_time = self.update_locations(driver, closest_reservation, closest_reservation['picked_up'])
                     arrival_time = current_time + location_update_time
 
                     if location_update_time == -1:
-                        # issue pick up or drop off event because driver has arrived to passenger or destination
+                        # ISSUE PICKUP OR DROPOFF SINCE DRIVER HAS ARRIVED TO RESERVATION OR THE DROPOFF LOCATION
                         if not closest_reservation['picked_up']:
-                            # print()
-                            # print(closest_reservation['current_location'])
-                            # print(driver['current_location'])
-                            # print(arrival_time)
-                            # print(current_time)
-                            # print()
                             self.future_event_list.put(
                                 (
                                     current_time + shifter,
@@ -269,13 +300,6 @@ class Simulation(object):
                                 )
                             )
                         else:
-                            # print()
-                            # print()
-                            # print(driver['current_reservations'])
-                            # print()
-                            # print(closest_reservation)
-                            # print()
-                            # print()
                             self.future_event_list.put(
                                 (
                                     arrival_time + shifter,
@@ -289,7 +313,7 @@ class Simulation(object):
                                 )
                             )
                     else:
-                        # issue another intersection arrival event
+                        # IF THE DRIVER HAS NOT ARRIVED AT RESERVATION OR A DROPOFF LOCATION, ISSUE ANOTHER INTERSECTION ARRIVAL EVENT
                         self.future_event_list.put(
                             (
                                 arrival_time + shifter,
@@ -309,11 +333,7 @@ class Simulation(object):
                 current_time = next_event[0]
                 reservation['picked_up'] = True
                 reservation['pickup_time'] = current_time
-                # print("reserve time: {}".format(reservation['reserve_time']))
-                # print("pickup time: {}".format(current_time))
 
-                # location_update_time = self.update_locations(driver, reservation, reservation['picked_up'])
-                # arrival_time = current_time + location_update_time
                 self.future_event_list.put(
                     (
                         current_time + shifter,
@@ -326,46 +346,17 @@ class Simulation(object):
                     )
                 )
             elif event_type == 'drop off':
-                # drop off passenger and issue idle_arrival event for driver to look for reservation
                 event = next_event[1]['event']
                 driver = event['driver']
                 reservation = event['reservation']
                 current_time = next_event[0]
-
-                # no carpool stuff
-                # current_reservation = self.closest_reservation(driver)
-
-                # driver_location = driver['current_location']
-                # current_reservation = driver['current_reservations'][0]
-                # current_reservation_location = current_reservation['current_location']
-
-                # # find closest reservation
-                # min_dist = 1000000
-                # for reservation in reservations:
-                #     reservation_location = reservation['current_location']
-                #     dist = np.linalg.norm(np.array(driver_location) - np.array(reservation_location))
-                #     if dist < min_dist:
-                #         min_dist = dist
-                #         current_reservation = reservation
-                #         current_reservation_location = reservation_location
-
                 reservation['dropoff_time'] = current_time
-
                 driver['serviced_passengers'].append(reservation)
                 driver['seats_filled'] -= reservation['party_size']
-                self.completed_reservations.append(reservation)
 
                 reservations = driver['current_reservations']
-                # print()
-                # print()
-                # print(reservations)
-                # print()
-                # print(reservation)
-                # print()
-                # print()
                 reservations.remove(reservation)
 
-                # only trigger idle arrival if reservation list is empty. otherwise trigger, intersection arrival
                 if len(reservations) == 0:
                     self.future_event_list.put(
                         (
@@ -397,15 +388,8 @@ class Simulation(object):
                 current_time = next_event[0]
                 driver['idle'] = True
 
-                # available_drivers = [driver for driver in self.drivers if driver['idle'] and driver['capacity'] - driver['seats_filled'] >= reservation['party_size']]
                 for res in self.reservations:
                     if not res['assigned']:
-                        self.assignment_calls_from_idle_arrival += 1
-                        # print("from idle arrival: {}".format(self.assignment_calls_from_idle_arrival))
-                        if len(self.completed_reservations) >= len(self.reservations):
-                            print("idle arrival event overdoing")
-                        if res['assigned']:
-                            print('already assigned (idle arrival)!')
                         self.future_event_list.put(
                             (
                                 current_time,
@@ -420,31 +404,12 @@ class Simulation(object):
     @staticmethod
     def update_locations(driver, closest_reservation, picked_up = False):
         """Take driver and passenger to an intersection that is closer to the destination"""
-        # uses normal distribution
-        # print(picked_up)
-        # 1. check if driver is at pickup location
-        # 2. if not, move driver closer to passenger location using normal distribution
 
-        # move closest reservation to front of current reservations list
-        # print(len(driver['current_reservations']))
         driver_location = driver['current_location']
         current_reservation = closest_reservation
         current_reservation_location = closest_reservation['current_location']
-
-        # find closest reservation
-        # min_dist = 1000000
-        # for reservation in driver['current_reservations']:
-        #     reservation_location = reservation['current_location']
-        #     dist = np.linalg.norm(np.array(driver_location) - np.array(reservation_location))
-        #     if dist < min_dist:
-        #         min_dist = dist
-        #         current_reservation = reservation
-        #         current_reservation_location = reservation_location
-
-
         dx = current_reservation_location[0] - driver_location[0]
         dy = current_reservation_location[1] - driver_location[1]
-
         intersection_arrival_time_length = np.random.normal(60, 20)
 
         if dx == 0 and dy == 0:
@@ -522,24 +487,13 @@ class Simulation(object):
 
         return intersection_arrival_time_length
 
-        # print('driver location: {}'.format(driver_location))
-        # print('reservation location: {}'.format(reservation_location))
-        # print(dx)
-        # print(dy)
-
-
-        # return intersection arrival time
-        # print()
-        # pass
-
     @staticmethod
     def closest_reservation(driver):
+        """FINDS CLOSEST RESERVATION THAT THE DRIVER HAS BEEN ASSIGNED"""
         driver_location = driver['current_location']
         reservations = driver['current_reservations']
         current_reservation = reservations[0]
         current_reservation_location = current_reservation['current_location']
-
-        # find closest reservation
         min_dist = 1000000
         for reservation in driver['current_reservations']:
             reservation_location = reservation['current_location']
@@ -551,33 +505,29 @@ class Simulation(object):
         return current_reservation
 
 if __name__ == "__main__":
+    num_drivers = 40
+    passengers = 0
+    ninety_percent_runs = 0
+    N = 100
+    percentages = [0]*N
 
-    # while True:
-    #     try:
-    sim = Simulation(num_reservations=100, num_drivers=5)
-    print(len(sim.reservations))
-    # for driver in sim.drivers:
-    #     print(driver)
-    sim.run()
-    for res in sim.reservations:
-        print(res['reserve_time'])
-        print(res['pickup_time'])
-        # print(res['current_location'])
-        # print(res['dropoff_coords'])
-        # print(res['pickup_time'])
-        # print(res)
-        # print((res['reserve_time']))
-        # print((res['pickup_time']))
-        # print()[']
-        # print((res['pickup_time'] - res['reserve_time'])/60)
-    # # for driver in sim.drivers:
-    # #     print(driver)
-    # # for event in sim.all_events:
-    # #     print(event)
-    # print(len(sim.completed_reservations))
+    for i in range(N):
+        sim = Simulation(num_reservations=100000, num_drivers=num_drivers, time=7200.0)
+        sim.run()
+        passengers = 0
+        free_ride_passengers = 0
+        free_ride_reservations = 0
+        for res in sim.reservations:
+            passengers += res['party_size']
+            if (res['pickup_time'] - res['reserve_time'])/60 > 15.0:
+                free_ride_passengers += res['party_size']
+                free_ride_reservations += 1
+        percentage = 1.0 - free_ride_passengers/passengers
+        percentage_res = 1.0 - free_ride_passengers/len(sim.reservations)
+        print('Percentage of passengers that paid for a ride: {}'.format(percentage))
+        percentages[i] = percentage
+        if percentage >= 0.90:
+            ninety_percent_runs += 1
 
-        #     break
-        # except TypeError:
-        #     print('type error')
-    # for driver in sim.drivers:
-    #     print(driver)
+    print('P: {}'.format(ninety_percent_runs/N))
+    print('Number of drivers where the probability of no more than 5% rides being free is at least 90%: {}'.format(num_drivers))
