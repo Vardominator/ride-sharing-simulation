@@ -1,10 +1,7 @@
-from __future__ import division, print_function, unicode_literals
-
-# This code is so you can run the samples without installing the package
 import sys
 import os
+import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-#
 
 import cocos
 from cocos.director import director
@@ -13,19 +10,16 @@ from cocos.actions import *
 from pyglet.window.key import symbol_string
 from simulation import Simulation
 
-import argparse
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--drivers', type=int, default=20)
 parser.add_argument('--reservations', type=int, default=100)
 ARGS = parser.parse_args()
 
-class LynxRideSharing(cocos.layer.Layer):
-
+class RideSharing(cocos.layer.Layer):
     is_event_handler = True
-    def __init__(self):
 
-        super(LynxRideSharing, self).__init__()
+    def __init__(self):
+        super(RideSharing, self).__init__()
 
         self.completed_amount_label = cocos.text.Label(
             '0',
@@ -37,7 +31,6 @@ class LynxRideSharing(cocos.layer.Layer):
             color = (124,252,0, 255)
         )
         self.add(self.completed_amount_label)
-
         self.free_amount_label = cocos.text.Label(
             '0',
             font_name = 'Arial',
@@ -48,7 +41,6 @@ class LynxRideSharing(cocos.layer.Layer):
             color = (255,0,0, 255)
         )
         self.add(self.free_amount_label)
-
         self.time_label = cocos.text.Label(
             '0',
             font_name = 'Arial',
@@ -63,7 +55,7 @@ class LynxRideSharing(cocos.layer.Layer):
         self.shift_x = 400
         self.shift_y = 20
         self.duration = 0.01
-        self.dt = 0.01
+        self.dt = 0.05
         self.intersections = []
         self.icoords = []
         self.cars = []
@@ -75,20 +67,9 @@ class LynxRideSharing(cocos.layer.Layer):
 
         self.reservation_ids = []
         self.first_time_moves = []
-        self.keys_being_pressed = set()
 
         self.simulation.run()
-        # for reservantion in self.simulation.reservations:
-        #     print(reservantion)
-        # for reservation in self.simulation.reservations:
-        #     self.reservation_ids.append(reservation['reservation_id'])
-        #     self.first_time_moves.append(False)
-        #     reservation_str = cocos.sprite.Sprite('resources/reservation.png')
-        #     location = (reservation['current_location'][0]*50 + self.shift_x, reservation['current_location'][1]*50 + self.shift_y)
-        #     reservation_str.position = location
-        #     self.active_reservations.append(reservation_str)
-        #     self.add(reservation_str)
-
+        
         self.all_events = self.simulation.all_events
         self.frame = 0
 
@@ -187,25 +168,21 @@ class LynxRideSharing(cocos.layer.Layer):
             event_time = next_event[0]
             event_type = next_event[1]['event_type']
             event = next_event[1]['event']
-            # print(event_time)
             self.time_label.element.text = '{}:{}'.format(int(event_time/60), '{0:0>2}'.format(int(event_time%60)))
 
             if event_type == 'reservation':
-                # print(event['reservation_id'])
+                event = event['reservation']
                 if event['reservation_id'] not in self.reservation_ids:
-                    # print(event['reservation_id'])
                     self.reservation_ids.append(event['reservation_id'])
                     self.first_time_moves.append(False)
                     reservation = cocos.sprite.Sprite('resources/reservation.png')
                     location = (event['current_location'][0]*50 + self.shift_x, event['current_location'][1]*50 + self.shift_y)
                     reservation.position = location
                     self.active_reservations.append(reservation)
-                    # self.add(reservation)
             elif event_type == 'intersection arrival':
                 driver = event['driver']
                 self.move_to_intersection(driver, event_time)
             self.frame += 1
-
 
     def move_to_intersection(self, driver, time):
         id = driver['driver_id']
@@ -226,40 +203,22 @@ class LynxRideSharing(cocos.layer.Layer):
 
             reserve_time = reservation['reserve_time']
             dropoff_time = reservation['dropoff_time']
-            # print(dropoff_time)
             if time >= reserve_time:
                 self.add(reservation_sprite)
 
             if reservation_location[0] == reservation_destination[0] and reservation_location[1] == reservation_destination[1]:
                 reservation_sprite.do(Place((-100, -100)))
-                # self.completed_rides += 1
-                # print("completed rides: {}".format(self.completed_rides))
                 self.completed_reservations.add(reservation_id)
-                # print("completed_rides: {}".format(len(self.completed_reservations)))
                 self.completed_amount_label.element.text = str(len(self.completed_reservations))
             elif driver_position[0] == reservation_location[0] and driver_position[1] == reservation_location[1]:
                 new_reservation_location = (reservation_location[0]*50 + self.shift_x, reservation_location[1]*50 + self.shift_y)
                 reservation_sprite.do(MoveTo(new_reservation_location, self.duration))
 
                 if not self.first_time_moves[reservation_id]:
-                    # print('time: {}'.format(time))
-                    # print('reservation time: {}'.format(reservation['reserve_time']))
-                    # print('wait time(m): {}'.format((time - reservation['reserve_time'])/60.0))
                     self.first_time_moves[reservation_id] = True
-                    # print(reservation['pickup_time'] - reservation['reserve_time'])
                     if (time - reservation['reserve_time'])/60.0 > 15.0:
                         self.free_rides += 1
                         self.free_amount_label.element.text = str(self.free_rides)
-                        # print("free rides: {}".format(self.free_rides))
-                        # print("percentage: {}%".format(100 * len(self.completed_reservations)/(len(self.completed_reservations) + self.free_rides)))
-
-            # if reservation_location[0] == reservation_destination[0] and reservation_location[1] == reservation_destination[1]:
-            #     reservation_sprite.do(Place((-100, -100)))
-            #     # self.completed_rides += 1
-            #     # print("completed rides: {}".format(self.completed_rides))
-            #     self.completed_reservations.add(reservation_id)
-            #     # print("completed_rides: {}".format(len(self.completed_reservations)))
-            #     self.completed_amount_label.element.text = str(len(self.completed_reservations))
 
         for reservation in driver['serviced_passengers']:
             reservation_id = reservation['reservation_id']
@@ -267,20 +226,12 @@ class LynxRideSharing(cocos.layer.Layer):
             reserve_spr.do(Place((-100,-100)))
 
 
-    def on_key_press(self, key, modifiers):
-        self.keys_being_pressed.add(key)
-
-        if symbol_string(key) == "RIGHT":
-            print(symbol_string(key))
-            self.run_simulation()
-
-
 
 # initialize and create a window
-director.init(width=1400, height=1000, caption="Lynx - Ferrari's Only", fullscreen=False)
+director.init(width=1400, height=1000, caption="Ride Sharing - Ferrari's Only", fullscreen=False)
 
 # create a hello world instance
-lynx_layer = LynxRideSharing()
+lynx_layer = RideSharing()
 
 # create a scene that contains the LynxRideSharing layer
 main_scene = cocos.scene.Scene(lynx_layer)

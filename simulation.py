@@ -1,8 +1,13 @@
 import pprint
+import json
 import numpy as np
 import scipy.stats as st
 from queue import PriorityQueue
 import copy
+import math
+
+pp = pprint.PrettyPrinter(indent=4)
+f = open('events.txt', 'w')
 
 class Simulation(object):
     def __init__(self, time=7200.0, num_drivers=20, num_reservations=100, carpool_threshold=3):
@@ -16,7 +21,7 @@ class Simulation(object):
         of reservations are fulfilled. This class is instantiated by the LynxRideSharing 
         game object. Other information: 20x20 intersections, intersection arrival
         follows a normal distribution, reservations follow an exponential distribution.
-        Pickup destinations are random, but dropoff destinations depend on the "time
+        Pickup destinations are random, but dropoff destinations depend on the "time 
         of day" and "type of street", party size of a reservation and driver capacity
         follows a particular distribution, and whether or not a reservations approves
         of a carpool depends on its party size.
@@ -60,13 +65,16 @@ class Simulation(object):
 
         time = 0.0
         while time < self.time:
-            if time % 60.0 == 0.0:
-                if len(self.reservations) <= self.num_reservations:
-                    self.create_reservation(time)
-                    second_time = time + np.random.exponential(scale=2)
-                    self.create_reservation(second_time)
-            time += 60.0
-        self.reservations = self.reservations[:-2]
+            # if time % 60.0 == 0.0:
+            if len(self.reservations) < self.num_reservations:
+                # self.create_reservation(time)
+                time += np.random.exponential(scale=30.0)
+                self.create_reservation(time)
+                # ime += new_time
+                # print(time)
+            else:
+                break
+        # self.reservations = self.reservations[:-2]
 
     def create_reservation(self, time):
         """Creates a reservation given the time. The pickup location is random, 
@@ -146,16 +154,21 @@ class Simulation(object):
                 'current_reservations': [],
                 'serviced_passengers': []
             })
+        
+        # print(self.drivers)
 
     def initialize_future_event_list(self):
         """Initializes the future event list of inserting all reservations as events. """
-
+        # print(self.reservations)
         for reservation in self.reservations:
+            # print(reservation)
             self.future_event_list.put(
                 (reservation['reserve_time'],
                 {
                     'event_type': 'reservation',
-                    'event': reservation
+                    'event': {
+                        'reservation': reservation
+                    }
                 }
                 )
             )
@@ -174,9 +187,16 @@ class Simulation(object):
             self.all_events.append(copy.deepcopy(next_event))
             event_type = next_event[1]['event_type']
 
+            # all reservation, pick up and drop off times should be rounded to the nearest minute
+            # interestion arrival and idle arrival times should be rounded to the nearest tenth of a minute
+            
+            # f.write('{}: {}'.format(next_event[0], pp.pprint(next_event[1])))
+            # event = {'event_type': event_type, 'event': next_event[1]['event'], 'time': next_event[0]}
+            # f.write(pprint.pformat(event) + '\n\n')
+
             if event_type == 'reservation':
                 # RESERVATION EVENT
-                reservation1 = next_event[1]['event']
+                reservation1 = next_event[1]['event']['reservation']
                 current_time = next_event[0]
                 # ISOLATE AVAILABLE DRIVERS
                 available_drivers = [driver for driver in self.drivers if driver['capacity'] - driver['seats_filled'] >= reservation1['party_size']]
@@ -206,6 +226,16 @@ class Simulation(object):
                             }
                         )
                     )
+                
+                f.write('{}, {}, {}, ResId: {}, Party: {}, Pool: {}\n'.format(
+                                              round(current_time), 
+                                              event_type,
+                                              tuple(reservation1['current_location']),
+                                              reservation1['reservation_id'],
+                                              reservation1['party_size'],
+                                              reservation1['carpool']
+                                              ))
+
 
             elif event_type == 'reservation assignment':
                 # ASSIGN A DRIVER TO THE RESERVATION
@@ -234,6 +264,16 @@ class Simulation(object):
                         )
                     )
 
+
+                    f.write('{}, {}, ResId: {}, DriverId: {}, SeatsFilled: {}/{}\n'.format(
+                                                round(current_time),
+                                                event_type,
+                                                reservation2['reservation_id'],
+                                                driver['driver_id'],
+                                                driver['seats_filled'],
+                                                driver['capacity']))
+
+
             elif event_type == 'intersection arrival':
                 # ARRIVE AT AN INTERSECTION
                 event = next_event[1]['event']
@@ -242,41 +282,37 @@ class Simulation(object):
                 reservations = driver['current_reservations']
 
                 # # an optimized version of carpooling that does not yet work: check if there is an unassigned reservation nearby. If so, trigger assignment event
-                # for res in self.reservations:
-                #     # check for unassigned reservations
-                #     if not res['assigned'] and res['carpool']:
+                for res in self.reservations:
+                    # check for unassigned reservations
+                    if not res['assigned'] and res['carpool']:
+                        print('carpool')
+                        reservation_location = res['current_location']
+                        party_size = res['party_size']
+                        driver_location = driver['current_location']
+                        capacity = driver['capacity']
+                        seats_filled = driver['seats_filled']
 
-                #         reservation_location = res['current_location']
-                #         party_size = res['party_size']
-                #         driver_location = driver['current_location']
-                #         capacity = driver['capacity']
-                #         seats_filled = driver['seats_filled']
+                        # check if driver has space
+                        if party_size <= capacity - seats_filled and not res['assigned']:
+                            # check if reservation is close enough
+                            dx = abs(reservation_location[0] - driver_location[0])
+                            dy = abs(reservation_location[1] - driver_location[1])
+                            if dx <= self.carpool_threshold and dy <= self.carpool_threshold:
+                                # print('From intersection arriva: {}'.format(self.assignment_calls_from_intersection_arrival))
 
-                #         # check if driver has space
-                #         if party_size <= capacity - seats_filled and not res['assigned']:
-                #             # check if reservation is close enough
-                #             dx = abs(reservation_location[0] - driver_location[0])
-                #             dy = abs(reservation_location[1] - driver_location[1])
-                #             if dx <= self.carpool_threshold and dy <= self.carpool_threshold:
-                #                 self.assignment_calls_from_intersection_arrival += 1
-                #                 # print('From intersection arriva: {}'.format(self.assignment_calls_from_intersection_arrival))
-                #                 if len(self.completed_reservations) >= len(self.reservations):
-                #                     print("intersection arrival event overdoing")
-                #                 if res['assigned']:
-                #                     print('already assigned (intersection arrival)!')
-                #                 self.future_event_list.put(
-                #                     (
-                #                         current_time + shifter,
-                #                         {
-                #                             'event_type': 'reservation assignment',
-                #                             'event': {
-                #                                 'driver': driver,
-                #                                 'reservation': res
-                #                             }
-                #                         }
-                #                     )
-                #                 )
-                #                 break
+                                self.future_event_list.put(
+                                    (
+                                        current_time + shifter,
+                                        {
+                                            'event_type': 'reservation assignment',
+                                            'event': {
+                                                'driver': driver,
+                                                'reservation': res
+                                            }
+                                        }
+                                    )
+                                )
+                                break
 
                 if len(driver['current_reservations']) > 0:
                     # GO TO NEAREST RESERVATION
@@ -326,6 +362,20 @@ class Simulation(object):
                             )
                         )
 
+                    print(reservations)
+                    res_ids = ','.join([str(res['reservation_id']) for res in reservations])
+                    res_locations = ','.join([str(tuple(res['current_location'])) for res in reservations])
+
+                    f.write('{}, {}, DriverId: {}, DriverLoc: {}, ResIds: ({}), AssignedResLocations: ({})\n'.format(
+                                            round(current_time, 1),
+                                            event_type,
+                                            driver['driver_id'],
+                                            tuple(driver['current_location']),
+                                            res_ids,
+                                            res_locations
+                                            ))
+
+
             elif event_type == 'pick up':
                 event = next_event[1]['event']
                 driver = event['driver']
@@ -345,6 +395,17 @@ class Simulation(object):
                         }
                     )
                 )
+
+
+                f.write('{}, {}, {}, DriverId: {}, ResId: {}\n'.format(
+                                        round(current_time),
+                                        event_type,
+                                        tuple(driver['current_location']),
+                                        driver['driver_id'],
+                                        reservation['reservation_id']
+                                        ))
+
+
             elif event_type == 'drop off':
                 event = next_event[1]['event']
                 driver = event['driver']
@@ -382,6 +443,14 @@ class Simulation(object):
                         )
                     )
 
+                f.write('{}, {}, {}, DriverId: {}, ResId: {}\n'.format(
+                        round(current_time),
+                        event_type,
+                        tuple(driver['current_location']),
+                        driver['driver_id'],
+                        reservation['reservation_id']
+                        ))
+
             elif event_type == 'idle_arrival':
                 event = next_event[1]['event']
                 driver = event['driver']
@@ -395,11 +464,19 @@ class Simulation(object):
                                 current_time,
                                 {
                                     'event_type': 'reservation',
-                                    'event': res
+                                    'event': {
+                                        'reservation': res
+                                    }
                                 }
                             )
                         )
                         break
+                
+
+                f.write('{}, {}, {}, DriverId: {}\n'.format(round(current_time, 1), event_type, tuple(driver['current_location']), driver['driver_id']))
+
+
+        f.close()
 
     @staticmethod
     def update_locations(driver, closest_reservation, picked_up = False):
@@ -517,6 +594,7 @@ if __name__ == "__main__":
         passengers = 0
         free_ride_passengers = 0
         free_ride_reservations = 0
+        # print(sim.reservations)
         for res in sim.reservations:
             passengers += res['party_size']
             if (res['pickup_time'] - res['reserve_time'])/60 > 15.0:
@@ -524,10 +602,18 @@ if __name__ == "__main__":
                 free_ride_reservations += 1
         percentage = 1.0 - free_ride_passengers/passengers
         percentage_res = 1.0 - free_ride_passengers/len(sim.reservations)
-        print('Percentage of passengers that paid for a ride: {}'.format(percentage))
+        # print('Percentage of passengers that paid for a ride: {}'.format(percentage))
+        print(i)
         percentages[i] = percentage
         if percentage >= 0.90:
             ninety_percent_runs += 1
 
-    print('P: {}'.format(ninety_percent_runs/N))
-    print('Number of drivers where the probability of no more than 5% rides being free is at least 90%: {}'.format(num_drivers))
+    
+    runs = [1]*ninety_percent_runs
+    runs.extend([0]*(N - ninety_percent_runs))
+    print(runs)
+    conf_int = st.t.interval(0.90, N - 1, loc=np.mean(percentages), scale=st.sem(percentages))
+    print(conf_int)
+
+    # print('P: {}'.format(ninety_percent_runs/N))
+    # print('Number of drivers where the probability of no more than 5% rides being free is at least 90%: {}'.format(num_drivers))
