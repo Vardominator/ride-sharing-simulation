@@ -19,14 +19,3 @@ of a carpool depends on its party size.
 
 The simulation is ran and all of its events are created. Then a graphical
 application shows the results of the simulation with Ferrari's only.
-
-### GUI TODOs
-* Track total number of idle drivers
-* Track leading driver
-* Show party size next to reservation
-* Show capacity and passenger count for each driver
-
-### Other TODOs
-* Logging
-* Finish README: prequisites and installation
-* Screenshot/video of application running
